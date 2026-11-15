@@ -54,6 +54,21 @@ Visualization Manager:
       Color Transformer: AxisColor
       Axis: Z
       Decay Time: 0
+    - Class: rviz_default_plugins/PointCloud2
+      Name: Livox Horizon
+      Enabled: true
+      Topic:
+        Value: /livox/lidar
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Best Effort
+      Size (m): 0.02
+      Style: Points
+      Size (Pixels): 2
+      Color Transformer: FlatColor
+      Color: 0; 200; 255
+      Decay Time: 0
     - Class: rviz_default_plugins/Image
       Name: Camera
       Enabled: true

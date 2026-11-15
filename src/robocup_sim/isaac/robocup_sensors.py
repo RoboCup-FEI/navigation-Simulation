@@ -1,10 +1,8 @@
 # Senzory modelu v2 (robot_v2.urdf.xacro) v Isaac Sim, parametre podla
 # specifikacii vyrobcov:
 #   Hesai XT16               -> /hesai/points  (PointCloud2, hesai_frame)
-#   Livox Horizon, len vstavana IMU (BMI088)
-#                            -> /livox/imu     (Imu, livox_frame)
-#     Samotny Livox lidar sa nesimuluje: solid state lidar s vlastnymi lucmi
-#     v Isaac Sim 6.2 nepublikoval ziadne data.
+#   Livox Horizon            -> /livox/lidar   (PointCloud2 s casom bodu, livox_frame)
+#     vstavana IMU (BMI088)  -> /livox/imu     (Imu, livox_frame)
 #   Basler a2A1920-160ucPRO  -> /camera/image_raw, /camera/camera_info
 #                               (camera_optical_frame)
 #
@@ -13,8 +11,10 @@
 #
 # Importuje ho robocup_isaac.py az po starte SimulationApp.
 import math
+import os
 import xml.etree.ElementTree as ET
 
+import numpy as np
 import omni.graph.core as og
 import usdrt.Sdf
 from isaacsim.ros2.nodes import (Ros2CameraGraphConfig, Ros2RtxLidarGraphConfig,
@@ -23,7 +23,6 @@ from isaacsim.sensors.experimental.physics import IMU
 from isaacsim.sensors.experimental.rtx import Lidar
 from pxr import Gf, Sdf, UsdGeom, Vt
 
-EMITTER_STATE = 'OmniSensorGenericLidarCoreEmitterStateAPI:s001'
 CORE = 'omni:sensor:Core:'
 EMITTER = CORE + 'emitterState:s001:'
 # nie je v schema OmniLidar, ale profily ho maju (rotary lidar: vystrely za sekundu)
@@ -35,6 +34,21 @@ REPORT_RATE = CORE + 'reportRateBaseHz'
 HESAI_ELEVATIONS = [15.0 - 2.0 * i for i in range(16)]
 HESAI_HZ = 10
 HESAI_AZIMUTH_RES_DEG = 0.18
+
+# Livox Horizon: zorne pole 81.7 x 25.1 deg, 6 laserov nad sebou, neopakujuci sa vzor,
+# 240 000 bodov/s (24 000 na 100 ms snimok), dosah 0.5-260 m (90 m pri 10 %), 2 cm.
+# Vzor (azimut, elevacia v rad) je 40 snimok = 4 s z projektu OmniPerception
+# (scan_mode/horizon.npy); v subore su body po sesticiach (jeden vystrel 6 laserov).
+# Casy vystrelov tam nie su: sestica kazdych 25 us.
+LIVOX_PATTERN = os.path.join(os.path.dirname(__file__), 'data', 'livox_horizon_pattern.npy')
+LIVOX_HZ = 10
+LIVOX_POINTS_PER_FRAME = 24000
+LIVOX_LASERS = 6
+# SOLID_STATE lidar v Isaac Sim 6.2 nestrieda stavy luce (isaac-sim/IsaacSim #818), preto
+# ROTARY s 1 otackou/s a 10 snimkami/s: Isaac otoci vzor o 36 deg za snimok a azimuty sa
+# vopred otacaju o -36 deg * (snimok mod 10) spat (#828). Overene: smery do 0.02 deg,
+# stavy sa striedaju kazdych 100 ms, bez rozmazania cez casy vystrelov.
+LIVOX_TICKS_PER_TURN = 10
 
 # Basler a2A1920-160ucPRO: Sony IMX392, 1920 x 1200 px, pixel 3.45 um.
 # Objektiv nie je znamy, ohniskova vzdialenost je odhad (6 mm -> ~58 x 38 deg).
@@ -72,9 +86,10 @@ def set_local_pose(stage, path, pose):
     xform.AddOrientOp(UsdGeom.XformOp.PrecisionDouble).Set(pose.ExtractRotationQuat())
 
 
-def create_lidar(stage, path, pose, hz, attributes):
-    # accumulate_outputs: jedna sprava = cela otocka, nie cast za jeden render frame
-    Lidar.create(path=path, tick_rate=float(hz), schemas=[EMITTER_STATE], accumulate_outputs=True)
+def create_lidar(stage, path, pose, hz, attributes, states=1, accumulate=True):
+    # accumulate: jedna sprava = cela otocka, nie cast za jeden render frame
+    schemas = [f'OmniSensorGenericLidarCoreEmitterStateAPI:s{k + 1:03d}' for k in range(states)]
+    Lidar.create(path=path, tick_rate=float(hz), schemas=schemas, accumulate_outputs=accumulate)
     prim = stage.GetPrimAtPath(path)
     for name, value in attributes.items():
         attr = prim.GetAttribute(name)
@@ -117,6 +132,43 @@ def create_hesai_xt16(stage, path, pose):
     })
 
 
+def create_livox_horizon(stage, path, pose):
+    pattern = np.degrees(np.load(LIVOX_PATTERN, allow_pickle=False).astype(np.float64))
+    frames = pattern.reshape(-1, LIVOX_POINTS_PER_FRAME, 2)
+    n = LIVOX_POINTS_PER_FRAME
+    index = np.arange(n)
+    fire_ns = (index // LIVOX_LASERS) * int(1e9 / LIVOX_HZ / (n // LIVOX_LASERS))
+    # RTX vrati z lucov s rovnakym channelId len jeden bod, kazdy luc ma preto vlastny;
+    # laser (line 0-5 pre LIO) je (channelId - 1) % 6, body su v poradi po sesticiach
+    channel = index + 1
+    attributes = {
+        CORE + 'scanType': 'ROTARY',
+        CORE + 'rotationDirection': 'CW',
+        CORE + 'scanRateBaseHz': LIVOX_HZ // LIVOX_TICKS_PER_TURN,
+        CORE + 'patternFiringRateHz': LIVOX_HZ,
+        CORE + 'stateResolutionStep': 1,
+        CORE + 'numberOfEmitters': n,
+        CORE + 'numberOfChannels': n,
+        CORE + 'nearRangeM': 0.5,
+        # lidar je v strede vlastneho puzdra (115 x 77 x 84 mm), luce zacinaju mimo neho
+        CORE + 'rangeOffsetM': 0.1,
+        CORE + 'farRangeM': 260.0,
+        CORE + 'minReflectance': 0.1,
+        CORE + 'minReflectionRangeM': 90.0,
+        CORE + 'rangeAccuracyM': 0.02,
+        CORE + 'maxReturns': 1,
+        CORE + 'waveLengthNm': 905.0,
+    }
+    for k, frame in enumerate(frames):
+        state = f'{CORE}emitterState:s{k + 1:03d}:'
+        turn = -36.0 * (k % LIVOX_TICKS_PER_TURN)
+        attributes[state + 'azimuthDeg'] = Vt.FloatArray.FromNumpy((frame[:, 0] + turn).astype(np.float32))
+        attributes[state + 'elevationDeg'] = Vt.FloatArray.FromNumpy(frame[:, 1].astype(np.float32))
+        attributes[state + 'fireTimeNs'] = Vt.UIntArray.FromNumpy(fire_ns.astype(np.uint32))
+        attributes[state + 'channelId'] = Vt.UIntArray.FromNumpy(channel.astype(np.uint32))
+    create_lidar(stage, path, pose, LIVOX_HZ, attributes, states=len(frames), accumulate=False)
+
+
 def create_basler(stage, path, optical_pose):
     camera = UsdGeom.Camera.Define(stage, path)
     width, height = CAMERA_SENSOR_PX
@@ -133,10 +185,13 @@ def create_basler(stage, path, optical_pose):
 def create_imu_graph(imu_path, frame_id, topic):
     keys = og.Controller.Keys
     og.Controller.edit(
-        {'graph_path': '/Graph/ROS_LivoxImu', 'evaluator_name': 'execution'},
+        # OnPhysicsStep tika len v on-demand grafe
+        {'graph_path': '/Graph/ROS_LivoxImu', 'evaluator_name': 'execution',
+         'pipeline_stage': og.GraphPipelineStage.GRAPH_PIPELINE_STAGE_ONDEMAND},
         {
             keys.CREATE_NODES: [
-                ('Tick', 'omni.graph.action.OnPlaybackTick'),
+                # kazdy krok fyziky (200 Hz), nie kazdy vykresleny snimok
+                ('Tick', 'isaacsim.core.nodes.OnPhysicsStep'),
                 ('Context', 'isaacsim.ros2.bridge.ROS2Context'),
                 ('SimTime', 'isaacsim.core.nodes.IsaacReadSimulationTime'),
                 ('ReadImu', 'isaacsim.sensors.physics.IsaacReadIMU'),
@@ -150,7 +205,7 @@ def create_imu_graph(imu_path, frame_id, topic):
                 ('PubImu.inputs:topicName', topic),
             ],
             keys.CONNECT: [
-                ('Tick.outputs:tick', 'ReadImu.inputs:execIn'),
+                ('Tick.outputs:step', 'ReadImu.inputs:execIn'),
                 ('ReadImu.outputs:execOut', 'PubImu.inputs:execIn'),
                 ('ReadImu.outputs:angVel', 'PubImu.inputs:angularVelocity'),
                 ('ReadImu.outputs:linAcc', 'PubImu.inputs:linearAcceleration'),
@@ -165,13 +220,16 @@ def create_imu_graph(imu_path, frame_id, topic):
 def create_sensors(stage, base_link, urdf):
     """Create the v2 sensors under base_link. Call before setup_simulation."""
     hesai = base_link + '/rtx_hesai'
+    livox = base_link + '/rtx_livox'
     camera = base_link + '/sensor_camera'
     imu = base_link + '/sensor_livox_imu'
     create_hesai_xt16(stage, hesai, frame_pose(urdf, 'hesai_frame'))
+    livox_pose = frame_pose(urdf, 'livox_frame')
+    create_livox_horizon(stage, livox, livox_pose)
     create_basler(stage, camera, frame_pose(urdf, 'camera_optical_frame'))
     IMU.create(imu)
-    set_local_pose(stage, imu, frame_pose(urdf, 'livox_frame'))
-    return {'hesai': hesai, 'camera': camera, 'imu': imu}
+    set_local_pose(stage, imu, livox_pose)
+    return {'hesai': hesai, 'livox': livox, 'camera': camera, 'imu': imu}
 
 
 def create_sensor_graphs(sensors, camera_resolution=CAMERA_RESOLUTION):
@@ -180,6 +238,12 @@ def create_sensor_graphs(sensors, camera_resolution=CAMERA_RESOLUTION):
         graph_path='/Graph/ROS_Hesai', lidar_prim=sensors['hesai'],
         frame_id='hesai_frame', publish_laser_scan=False,
         publish_point_cloud=True, point_cloud_topic='/hesai/points'))
+    # jedna sprava = jeden 100 ms snimok; cas bodu a laser (line) potrebuje LIO
+    create_ros2_rtx_lidar_graph(Ros2RtxLidarGraphConfig(
+        graph_path='/Graph/ROS_Livox', lidar_prim=sensors['livox'],
+        frame_id='livox_frame', publish_laser_scan=False,
+        publish_point_cloud=True, point_cloud_topic='/livox/lidar',
+        metadata={'Timestamp', 'ChannelId'}))
     graph = create_ros2_camera_graph(Ros2CameraGraphConfig(
         graph_path='/Graph/ROS_Camera', camera_prim=sensors['camera'],
         frame_id='camera_optical_frame', camera_info_topic='/camera/camera_info',

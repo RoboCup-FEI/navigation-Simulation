@@ -11,7 +11,7 @@ Changes against the original repository (ROS 2 Humble, one robot model with a
   [Migration from Humble to Jazzy](#migration-from-humble-to-jazzy);
 - a new robot model **v2** (default) built from the current CAD (Fusion) with
   suspension brackets and a sensor tower Livox Horizon + Basler camera + Hesai
-  XT16, and simulated Hesai, camera and Livox IMU, see
+  XT16, all simulated (Hesai, Livox Horizon lidar and IMU, camera), see
   [Robot model v2 and its sensors](#robot-model-v2-and-its-sensors). The
   original model is kept as **v1** (`./run.sh --model v1`).
 
@@ -103,7 +103,8 @@ Model v2 (`robot_v2.urdf.xacro`, default):
 | `/hesai/points` | Isaac → | `PointCloud2`, Hesai XT16, frame `hesai_frame` |
 | `/scan` | pointcloud_to_laserscan → | slice of `/hesai/points` from 5 cm above the floor to 5 cm above the Hesai, 0.18° |
 | `/camera/image_raw`, `/camera/camera_info` | Isaac → | Basler, rgb8, 640 × 400 (sensor 1920 × 1200, same field of view), frame `camera_optical_frame` |
-| `/livox/imu` | Isaac → | `Imu`, Livox Horizon built-in IMU, frame `livox_frame` |
+| `/livox/lidar` | Isaac → | `PointCloud2` (`x, y, z, timestamp`), Livox Horizon, ~24 000 points per 100 ms frame, frame `livox_frame` |
+| `/livox/imu` | Isaac → | `Imu`, Livox Horizon built-in IMU, 200 Hz, frame `livox_frame` |
 
 Nav2 navigates in the `odom` frame with rolling-window costmaps fed by `/scan`;
 there is no static map or global localisation.
@@ -127,6 +128,18 @@ there is no static map or global localisation.
   (acceleration-limited to 2 m/s²) and the chassis is kept level; the wheels are
   frictionless. The robot still collides with the world. A PhysX 4-wheel skid
   steer with this URDF chattered, flipped and could not turn on the spot.
+  Two fixes on this branch:
+  - The base height is computed from the URDF (lowest wheel point + 5 mm,
+    `base_height()`); it was hard-coded for v1 (0.17 m). With v2 (0.1698 m to
+    the wheel bottom) the wheels touched the floor, the robot was pushed up
+    every step and, with friction, turned at 0.56 rad/s instead of 0.8, and at
+    a 5 ms physics step it slid ~3 cm/s while standing.
+  - The robot's frictionless material uses `frictionCombineMode = min`. PhysX
+    averages by default, so friction 0 against the floor (0.5) gave 0.25.
+- **Physics rate.** v2 runs physics at 200 Hz (5 ms, the IMU publishes every
+  step like the real 200 Hz BMI088) and renders at 50 Hz
+  (`RenderingManager.set_dt`), so the camera and lidars are not rendered every
+  physics step. v1 keeps 60 Hz for both.
 - **Arena.** The USD (Blender export, Y-up, centimetres) is turned Z-up, scaled
   to metres and centred on the origin. Every mesh gets a triangle-mesh
   collider; the two sliding doors get box colliders instead. The ceiling is
@@ -245,8 +258,8 @@ Sensor poses are read from the URDF, the sensors are children of the
 |---|---|---|
 | Hesai XT16 | custom RTX rotary lidar | 16 channels +15°…-15° in 2° steps, 360°, 0.18°, 10 Hz, range 0.05–120 m, accuracy 1 cm, 905 nm, single return; firing times approximated |
 | Basler a2A1920-160ucPRO | USD camera | sensor 1920 × 1200, pixel 3.45 µm, image rendered at 640 × 400 (see [Performance](#performance)); **focal length 6 mm is an estimate** (lens unknown), `CAMERA_FOCAL_MM` |
-| Livox Horizon IMU | Isaac IMU sensor at `livox_frame` | publishes orientation, angular velocity, acceleration with gravity |
-| Livox Horizon lidar | **not simulated** | see Known issues |
+| Livox Horizon IMU | Isaac IMU sensor at `livox_frame` | 200 Hz (published on every physics step, on-demand `OnPhysicsStep` graph), orientation, angular velocity, acceleration with gravity; no noise or bias |
+| Livox Horizon lidar | custom RTX lidar replaying a Horizon scan pattern (see below) | FoV 81.7° × 25.1° (pattern ±41° × ±14°), 24 000 points per 100 ms, 10 Hz, 6 lasers fired together every 25 µs, range 0.5–260 m (90 m at 10 %), accuracy 2 cm, per-point time |
 
 - `accumulateOutputs` is on, so one `/hesai/points` message holds a full
   revolution instead of the part rendered in one frame.
@@ -261,9 +274,33 @@ Sensor poses are read from the URDF, the sensors are children of the
   (checked against the walls). Tried without effect: non-visual material
   `single_sided` (also with `/rtx/materialDb/nonVisualMaterialCSV/enabled`),
   primvar `invisibleToSecondaryRays`.
+- **Livox Horizon.** The real sensor scans a forward cone with a
+  non-repetitive pattern (6 lasers, Risley prisms). Isaac Sim 6.2 cannot cycle
+  emitter states of a `SOLID_STATE` lidar (open bug,
+  [isaac-sim/IsaacSim#818](https://github.com/isaac-sim/IsaacSim/discussions/818);
+  our own custom solid-state lidar published no data at all). It is therefore
+  a `ROTARY` lidar used as a trick from
+  [#828](https://github.com/isaac-sim/IsaacSim/discussions/828):
+  `scanRateBaseHz = 1`, `patternFiringRateHz = 10`, `stateResolutionStep = 1`,
+  so Isaac turns the pattern by 36° per 100 ms tick; the azimuths of state *k*
+  are authored turned back by −36° × (*k* mod 10). Checked with a test room:
+  directions within 0.02°, one state per 100 ms, no smearing over the fire
+  times within a tick.
+  - Pattern: 40 frames (4 s) of a Livox Horizon pattern (azimuth, elevation),
+    `src/robocup_sim/isaac/data/livox_horizon_pattern.npy`, taken from
+    [OmniPerception](https://github.com/aCodeDog/OmniPerception)
+    (`LidarSensor/.../scan_mode/horizon.npy`). The points come in groups of
+    six (one firing of the 6 lasers); the file has no times, the groups are
+    fired every 25 µs (240 000 points/s). **That repository has no license**,
+    see Known issues.
+  - Every ray needs its own `channelId`: RTX returns only one point per
+    `channelId` and tick (with `channelId` = laser 1–6 the cloud had 6
+    points). The laser (`line` 0–5 for LIO) is `(channelId − 1) % 6`, but
+    `ChannelId` does not appear in the `PointCloud2` yet (only `timestamp`).
+  - `rangeOffsetM = 0.1` as for the Hesai (origin inside the Livox housing).
 - The Isaac importer names the visual prims after the mesh files
   (`base_link/hesai_xt16`, …), so the sensor prims are named `rtx_hesai`,
-  `sensor_camera`, `sensor_livox_imu` to avoid clashes.
+  `rtx_livox`, `sensor_camera`, `sensor_livox_imu` to avoid clashes.
 
 ### Other changes for v2
 
@@ -291,7 +328,9 @@ wall-clock second):
 | v1 | 0.77 |
 | v2, camera image 1920 × 1200 | 0.22 |
 | v2 without the camera | 0.71 |
-| **v2, camera image 640 × 400 (default)** | **0.58** |
+| v2, camera image 640 × 400, without the Livox lidar, physics and render 60 Hz | 0.58 |
+| v2, camera 640 × 400, with the Livox lidar, physics and render 60 Hz | 0.52 |
+| **v2, camera 640 × 400, with the Livox lidar, physics 200 Hz, render 50 Hz (default)** | **0.62** |
 | v2 with meshes simplified to ~13k triangles, camera 1920 × 1200 | 0.23 |
 
 The cost is the camera image rendered every frame, not the meshes (simplified
@@ -308,13 +347,24 @@ of view stays the same because it follows from the sensor size
 - **Nav2 footprint is still the v1 one** (0.56 × 0.47 m). v2 measures about
   0.52 × 0.55 m over the wheels (CAD), i.e. it is ~8 cm wider than the
   footprint. Not changed yet.
-- **Livox Horizon lidar is not simulated.** A solid-state RTX lidar with custom
-  rays (FoV 81.7° × 25.1°, 24 000 points per frame) publishes no data in Isaac
-  Sim 6.2; `Example_Solid_State` does, but stops as soon as its ray angles are
-  overwritten. Only the Livox mesh and its IMU are in the simulation.
+- **License of the Livox pattern.** `livox_horizon_pattern.npy` comes from
+  OmniPerception, which has no license file (all rights reserved by default).
+  Clarify before publishing it, or replace it with an own recording of the
+  Horizon (azimuth/elevation of 40 consecutive 100 ms frames).
+- **Livox output for LIO is not finished.** `/livox/lidar` is a
+  `PointCloud2`; FAST-LIO in Livox mode expects
+  `livox_ros_driver2/msg/CustomMsg` (`offset_time`, `line`, …), which needs a
+  converter node and the message package (not in the Jazzy apt repository).
+  The `timestamp` field is a 32-bit nanosecond time that wraps every ~4.3 s,
+  so point times have to be taken relative to the message.
+- **IMU checked against the exact odometry** (drive 0.5 m/s, brake, turn
+  0.8 rad/s): acceleration ±2.00 m/s² and angular velocity match exactly,
+  gravity 9.807 m/s², 200 Hz. Unlike the real BMI088 it has no noise or bias,
+  and the centripetal acceleration from its 0.15 m offset to the rotation
+  centre is missing (~0.1 m/s² at 0.8 rad/s).
 - The simulation runs slower than real time on an RTX 3060 Laptop (see
-  [Performance](#performance)); the camera and IMU rates are far
-  below the real sensors (160 fps / 200 Hz), the Hesai gives 10 Hz in
+  [Performance](#performance)); the camera gives at most 50 images/s in
+  simulation time (real sensor 160 fps), lidars 10 Hz and IMU 200 Hz in
   simulation time. The CPU governor was `powersave`, which Isaac warns about
   at startup; physics runs on the CPU.
 - The Hesai is 0.44 m above the floor and its lowest channel points 15° down,
