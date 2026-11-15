@@ -54,12 +54,12 @@ import omni.usd
 import usdrt.Sdf
 from isaacsim.asset.importer.urdf.impl import URDFImporter, URDFImporterConfig
 from isaacsim.core.experimental.prims import Articulation
-from isaacsim.core.rendering_manager import ViewportManager
+from isaacsim.core.rendering_manager import RenderingManager, ViewportManager
 from isaacsim.core.simulation_manager import SimulationEvent, SimulationManager
 from isaacsim.ros2.nodes import (Ros2ClockGraphConfig, Ros2RtxLidarGraphConfig,
                                  create_ros2_clock_graph, create_ros2_rtx_lidar_graph)
 from isaacsim.sensors.experimental.rtx import Lidar
-from pxr import Gf, Usd, UsdGeom, UsdLux, UsdPhysics, UsdShade
+from pxr import Gf, PhysxSchema, Usd, UsdGeom, UsdLux, UsdPhysics, UsdShade
 
 # ROS_DISTRO sa Isaacu nedava, bridge by potom hladal systemove ROS kniznice
 ROS_DISTRO = os.environ.get('ROBOCUP_ROS_DISTRO', 'jazzy')
@@ -67,11 +67,17 @@ ROS_DISTRO = os.environ.get('ROBOCUP_ROS_DISTRO', 'jazzy')
 MODELS = {'v1': 'robot.urdf.xacro', 'v2': 'robot_v2.urdf.xacro'}
 XACRO = MODELS[args.model]
 SCAN_FRAME = 'lidar_frame'  # 2D lidar modelu v1
-PHYSICS_DT = 1.0 / 60.0
+# v2: fyzika 200 Hz, IMU Livoxu publikuje pri kazdom kroku (BMI088 ma 200 Hz; 5 ms deli aj
+# 100 ms snimok lidaru), render 50 Hz (4 kroky fyziky na snimok), aby sa kamera a lidary
+# nekreslili 200x za sekundu
+PHYSICS_DT = 1.0 / 200.0 if args.model == 'v2' else 1.0 / 60.0
+RENDERING_DT = 1.0 / 50.0 if args.model == 'v2' else 1.0 / 60.0
 MAX_ACCELERATION = 2.0
 MAX_ANGULAR_ACCELERATION = 2 * MAX_ACCELERATION / 0.48
 CMD_VEL_NODE = '/Graph/ROS_Base/CmdVel'
-BASE_HEIGHT = 0.115 + 0.05 + 0.005
+# kolesa sa vznasaju tesne nad zemou: podvozok je kinematicky a pri kontakte so zemou
+# sa kolesa zaborili, fyzika robota odtlacala a trenie brzdilo otacanie
+WHEEL_CLEARANCE = 0.005
 
 
 def build_world(stage, usd_file):
@@ -167,6 +173,35 @@ def lidar_offset(urdf):
     raise RuntimeError(f'no joint to {SCAN_FRAME} in {urdf}')
 
 
+def base_height(urdf):
+    """Height of base_link above the floor: lowest wheel point plus WHEEL_CLEARANCE.
+
+    Wheels are the children of continuous joints with a cylinder collision; their
+    joint chains to base_link must be pure translations (true for v1 and v2).
+    """
+    root = ET.parse(urdf).getroot()
+    joints = {j.find('child').get('link'): j for j in root.iter('joint')}
+    lowest = 0.0
+    for joint in root.iter('joint'):
+        if joint.get('type') != 'continuous':
+            continue
+        link = joint.find('child').get('link')
+        cylinder = root.find(f"link[@name='{link}']/collision/geometry/cylinder")
+        if cylinder is None:
+            continue
+        z = 0.0
+        while link != 'base_link':
+            origin = joints[link].find('origin')
+            rpy = [float(v) for v in (origin.get('rpy') or '0 0 0').split()]
+            assert not any(rpy), f'rotated joint on the way to wheel {link}'
+            z += float(origin.get('xyz').split()[2])
+            link = joints[link].find('parent').get('link')
+        lowest = max(lowest, float(cylinder.get('radius')) - z)
+    if not lowest:
+        raise RuntimeError(f'no wheels found in {urdf}')
+    return lowest + WHEEL_CLEARANCE
+
+
 def find_prims(root_prim):
     articulation = base_link = None
     for prim in Usd.PrimRange(root_prim):
@@ -186,6 +221,11 @@ def make_frictionless(stage, robot):
     physics_material.CreateStaticFrictionAttr(0.0)
     physics_material.CreateDynamicFrictionAttr(0.0)
     physics_material.CreateRestitutionAttr(0.0)
+    # PhysX kombinuje trenie dvoch materialov priemerom: s podlahou bez materialu (0.5)
+    # by vyslo 0.25, 'min' dava naozaj 0
+    physx_material = PhysxSchema.PhysxMaterialAPI.Apply(material.GetPrim())
+    physx_material.CreateFrictionCombineModeAttr('min')
+    physx_material.CreateRestitutionCombineModeAttr('min')
     UsdShade.MaterialBindingAPI.Apply(robot).Bind(
         material, UsdShade.Tokens.weakerThanDescendants, 'physics')
 
@@ -238,8 +278,9 @@ def create_base_graph(articulation):
 
 class KinematicBase:
 
-    def __init__(self, articulation):
+    def __init__(self, articulation, height):
         self.robot = Articulation(articulation)
+        self.height = height
         self.lin = og.Controller.attribute(CMD_VEL_NODE + '.outputs:linearVelocity')
         self.ang = og.Controller.attribute(CMD_VEL_NODE + '.outputs:angularVelocity')
         self.v = self.w = 0.0
@@ -256,7 +297,7 @@ class KinematicBase:
         x, y, _ = positions.numpy()[0]
         qw, qx, qy, qz = orientations.numpy()[0]
         yaw = math.atan2(2 * (qw * qz + qx * qy), 1 - 2 * (qy ** 2 + qz ** 2))
-        self.robot.set_world_poses([[x, y, BASE_HEIGHT]],
+        self.robot.set_world_poses([[x, y, self.height]],
                                    [[math.cos(yaw / 2), 0.0, 0.0, math.sin(yaw / 2)]])
         self.robot.set_velocities([[self.v * math.cos(yaw), self.v * math.sin(yaw), 0.0]],
                                   [[0.0, 0.0, self.w]])
@@ -271,8 +312,9 @@ def main():
     build_world(stage, args.world)
 
     usd_file, urdf = import_robot()
+    height = base_height(urdf)
     spawn = UsdGeom.Xform.Define(stage, '/World/shoddy')
-    UsdGeom.XformCommonAPI(spawn).SetTranslate((args.x, args.y, BASE_HEIGHT))
+    UsdGeom.XformCommonAPI(spawn).SetTranslate((args.x, args.y, height))
     UsdGeom.XformCommonAPI(spawn).SetRotate((0.0, 0.0, math.degrees(args.yaw)))
     robot = stage.DefinePrim('/World/shoddy/robot')
     robot.GetReferences().AddReference(usd_file)
@@ -280,7 +322,8 @@ def main():
     make_frictionless(stage, robot)
     simulation_app.update()
     articulation, base_link = find_prims(robot)
-    print(f'[robocup_isaac] model={args.model} articulation={articulation} base_link={base_link}')
+    print(f'[robocup_isaac] model={args.model} articulation={articulation} base_link={base_link} '
+          f'base height {height:.4f} m')
 
     if args.model == 'v1':
         lidar_path = base_link + '/rtx_lidar'
@@ -293,6 +336,7 @@ def main():
         sensors = robocup_sensors.create_sensors(stage, base_link, urdf)
 
     SimulationManager.setup_simulation(dt=PHYSICS_DT, device='cpu')
+    RenderingManager.set_dt(RENDERING_DT)
     simulation_app.update()
 
     create_ros2_clock_graph(Ros2ClockGraphConfig(graph_path='/Graph/ROS_Clock'))
@@ -307,7 +351,7 @@ def main():
 
     app_utils.play()
     simulation_app.update()
-    base = KinematicBase(articulation)
+    base = KinematicBase(articulation, height)
     SimulationManager.register_callback(lambda dt, context: base.step(),
                                         event=SimulationEvent.PHYSICS_PRE_STEP)
     print('[robocup_isaac] simulation running', flush=True)
