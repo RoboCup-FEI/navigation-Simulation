@@ -33,7 +33,9 @@ DEFAULT_WORLD = os.path.join(
 parser = argparse.ArgumentParser()
 parser.add_argument('--world', default=DEFAULT_WORLD, help='USD prostredie')
 parser.add_argument('--headless', action='store_true')
-parser.add_argument('--x', type=float, default=0.0)
+# stred chodby: v (0, 0) zadny roh robota v2 zasahuje do ramu dveri a PhysX ho pri
+# starte z prekryvu odhodi (posun o centimetre, natocenie o 5-13 deg)
+parser.add_argument('--x', type=float, default=1.0)
 parser.add_argument('--y', type=float, default=0.0)
 parser.add_argument('--yaw', type=float, default=0.0)
 parser.add_argument('--model', choices=['v1', 'v2'], default='v2', help='Model robota')
@@ -109,22 +111,28 @@ def load_usd_world(stage, usd_file):
         .ComputeWorldBound(env.GetPrim()).ComputeAlignedRange()
     center = (box.GetMin() + box.GetMax()) / 2
     xf.SetTranslate((-center[0], -center[1], -box.GetMin()[2]))
-    meshes, boxed = 0, []
+    meshes, baked = 0, []
     xform_cache = UsdGeom.XformCache()
-    bbox_cache = UsdGeom.BBoxCache(Usd.TimeCode.Default(), ['default', 'render'])
     for prim in Usd.PrimRange(env.GetPrim()):
         if not prim.IsA(UsdGeom.Mesh):
             continue
         world = xform_cache.GetLocalToWorldTransform(prim)
         axes = [world.GetRow3(i).GetLength() for i in range(3)]
         if max(axes) > 10 * min(axes):
-            r = bbox_cache.ComputeWorldBound(prim).ComputeAlignedRange()
-            cube = UsdGeom.Cube.Define(stage, f'/World/environment_colliders/box_{len(boxed)}')
-            UsdGeom.XformCommonAPI(cube).SetTranslate(Gf.Vec3d((r.GetMin() + r.GetMax()) / 2))
-            UsdGeom.XformCommonAPI(cube).SetScale(Gf.Vec3f(*(r.GetSize() / 2)))
-            cube.CreatePurposeAttr(UsdGeom.Tokens.guide)
-            UsdPhysics.CollisionAPI.Apply(cube.GetPrim())
-            boxed.append(f'{prim.GetName()} {r.GetSize()[0]:.2f}x{r.GetSize()[1]:.2f}x{r.GetSize()[2]:.2f}m')
+            # Pri extremne nerovnomernej mierke (posuvne dvere: ~1 km stlacene 2000:1) PhysX
+            # nepostavi ziadny meshovy tvar. Neviditelna kopia meshu s bodmi uz vo svetovych
+            # suradniciach kolizuje presne; kvader cez bbox bol v urovni robota o 10 cm
+            # hrubsi (klucky), ktore lidar nevidi a robot sa o ne zasekaval.
+            src = UsdGeom.Mesh(prim)
+            points = [world.Transform(Gf.Vec3d(p)) for p in src.GetPointsAttr().Get()]
+            mesh = UsdGeom.Mesh.Define(stage, f'/World/environment_colliders/{prim.GetName()}')
+            mesh.CreatePointsAttr(points)
+            mesh.CreateFaceVertexCountsAttr(src.GetFaceVertexCountsAttr().Get())
+            mesh.CreateFaceVertexIndicesAttr(src.GetFaceVertexIndicesAttr().Get())
+            mesh.CreatePurposeAttr(UsdGeom.Tokens.guide)
+            UsdPhysics.CollisionAPI.Apply(mesh.GetPrim())
+            UsdPhysics.MeshCollisionAPI.Apply(mesh.GetPrim()).CreateApproximationAttr('none')
+            baked.append(prim.GetName())
             continue
         UsdPhysics.CollisionAPI.Apply(prim)
         UsdPhysics.MeshCollisionAPI.Apply(prim).CreateApproximationAttr('none')
@@ -136,7 +144,7 @@ def load_usd_world(stage, usd_file):
     ViewportManager.set_camera_view('/OmniverseKit_Persp', eye=[0.0, -0.9 * size[1], 0.9 * size[1]],
                                     target=[0.0, 0.0, 0.0])
     print(f'[robocup_isaac] {usd_file}: {size[0]:.1f} x {size[1]:.1f} x {size[2]:.1f} m, '
-          f'{meshes} mesh colliders, box colliders for {boxed}')
+          f'{meshes} mesh colliders, baked world-space colliders for {baked}')
 
 
 def import_robot():
@@ -242,6 +250,7 @@ def create_base_graph(articulation):
                 ('SimTime', 'isaacsim.core.nodes.IsaacReadSimulationTime'),
                 ('CmdVel', 'isaacsim.ros2.bridge.ROS2SubscribeTwist'),
                 ('Odom', 'isaacsim.core.nodes.IsaacComputeOdometry'),
+                ('Pose', 'isaacsim.core.nodes.IsaacReadWorldPose'),
                 ('PubOdom', 'isaacsim.ros2.bridge.ROS2PublishOdometry'),
                 ('PubTF', 'isaacsim.ros2.bridge.ROS2PublishRawTransformTree'),
                 ('Joints', 'isaacsim.sensors.physics.IsaacReadJointState'),
@@ -251,6 +260,7 @@ def create_base_graph(articulation):
                 ('SimTime.inputs:resetOnStop', True),
                 ('CmdVel.inputs:topicName', '/cmd_vel'),
                 ('Odom.inputs:chassisPrim', target),
+                ('Pose.inputs:prim', target),
                 ('PubOdom.inputs:topicName', '/odom'),
                 ('PubOdom.inputs:odomFrameId', 'odom'),
                 ('PubOdom.inputs:chassisFrameId', 'base_link'),
@@ -265,12 +275,15 @@ def create_base_graph(articulation):
                 ('Context.outputs:context', 'CmdVel.inputs:context'),
                 ('Odom.outputs:execOut', 'PubOdom.inputs:execIn'),
                 ('Odom.outputs:execOut', 'PubTF.inputs:execIn'),
-                ('Odom.outputs:position', 'PubOdom.inputs:position'),
-                ('Odom.outputs:orientation', 'PubOdom.inputs:orientation'),
+                # poza zo sveta, nie z IsaacComputeOdometry: ten ju meria od pozy v prvom
+                # ticku, a ked robota pri starte nieco posunie (napr. spawn v prekazke),
+                # je cely odom pootoceny voci arene. odom = ramec areny
+                ('Pose.outputs:translation', 'PubOdom.inputs:position'),
+                ('Pose.outputs:orientation', 'PubOdom.inputs:orientation'),
                 ('Odom.outputs:linearVelocity', 'PubOdom.inputs:linearVelocity'),
                 ('Odom.outputs:angularVelocity', 'PubOdom.inputs:angularVelocity'),
-                ('Odom.outputs:position', 'PubTF.inputs:translation'),
-                ('Odom.outputs:orientation', 'PubTF.inputs:rotation'),
+                ('Pose.outputs:translation', 'PubTF.inputs:translation'),
+                ('Pose.outputs:orientation', 'PubTF.inputs:rotation'),
                 ('Context.outputs:context', 'PubOdom.inputs:context'),
                 ('Context.outputs:context', 'PubTF.inputs:context'),
                 ('SimTime.outputs:simulationTime', 'PubOdom.inputs:timeStamp'),

@@ -83,7 +83,7 @@ Common to both models:
 | Topic / frame | Direction | Notes |
 |---|---|---|
 | `/clock` | Isaac → | simulation time, everything runs with `use_sim_time` |
-| `/odom`, TF `odom → base_link` | Isaac → | exact pose from the physics (no drift) |
+| `/odom`, TF `odom → base_link` | Isaac → | exact world pose from the physics (no drift); `odom` is the arena frame, the robot starts at its spawn pose |
 | `/scan` | → Nav2, slam_toolbox | `sensor_msgs/LaserScan`, source depends on the model (below) |
 | `/cmd_vel` | → Isaac | `geometry_msgs/Twist` |
 | TF `base_link → …` | robot_state_publisher | from `robocup_description` |
@@ -129,8 +129,11 @@ there is no static map or global localisation.
   steer with this URDF chattered, flipped and could not turn on the spot.
 - **Arena.** The USD (Blender export, Y-up, centimetres) is turned Z-up, scaled
   to metres and centred on the origin. Every mesh gets a triangle-mesh
-  collider; the two sliding doors get box colliders instead. The ceiling is
-  hidden. Spawn (0, 0) is free floor.
+  collider; the two sliding doors, whose transform PhysX cannot cook, get an
+  invisible copy of their mesh with the points baked into world space. The ceiling is
+  hidden. The default spawn (1, 0) is the middle of the corridor; at (0, 0) the rear
+  corner of model v2 overlaps a door frame and PhysX knocks the robot aside
+  at the start.
 - **Lidar (v1)** stands in for the robot's Hokuyo URG-04LX (which scanned 240° with
   1 cm noise; the simulated one scans 360° without noise or motion distortion).
   RTX lidars see rendered geometry, not colliders.
