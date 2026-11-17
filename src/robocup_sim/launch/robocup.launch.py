@@ -1,7 +1,7 @@
 # ROS strana simulacie: popis robota, relay lidaru, RViz, ovladanie cez rqt
 # a volitelne Nav2 + slam_toolbox. Spusta ho ../../../run.sh, ked Isaac
 # publikuje /clock. Rucne:
-#   ros2 launch robocup_sim robocup.launch.py [nav:=true planner:=teb|dwb|tr]
+#   ros2 launch robocup_sim robocup.launch.py [nav:=true planner:=teb|dwb|tr] [predictor:=true]
 import math
 import os
 
@@ -105,6 +105,22 @@ def generate_launch_description():
         condition=slam_condition,
     )
 
+    predictor_condition = IfCondition(LaunchConfiguration('predictor'))
+    ground_segmentation = Node(
+        package='ground_segmentation_ros2', executable='ground_segmentation_ros2_node',
+        name='ground_segmentation', output='screen',
+        parameters=[os.path.join(pkg, 'config', 'ground_segmentation', 'hesai.yaml'), use_sim_time],
+        remappings=[('/ground_segmentation/input_pointcloud', '/hesai/points')],
+        condition=predictor_condition,
+    )
+    obstacle_predictor = Node(
+        package='obstacle_predictor', executable='dynamic_obstacle_predictor',
+        name='dynamic_obstacle_predictor', output='screen',
+        parameters=[os.path.join(get_package_share_directory('obstacle_predictor'), 'config',
+                                 'dynamic_obstacle_predictor.yaml'), use_sim_time],
+        condition=predictor_condition,
+    )
+
     return LaunchDescription([
         DeclareLaunchArgument('rmw', default_value='rmw_fastrtps_cpp',
                               description='RMW, musi sediet s bridgeom v Isaacu'),
@@ -123,6 +139,8 @@ def generate_launch_description():
                               description='Lokalny planner Nav2: dwb | teb | tr'),
         DeclareLaunchArgument('slam', default_value='true',
                               description='Pri nav:=true aj slam_toolbox (mapa pre RViz)'),
+        DeclareLaunchArgument('predictor', default_value='false',
+                              description='Segmentacia zeme z Hesai + dynamic_obstacle_predictor'),
         robot_state_publisher,
         scan_relay,
         hesai_to_scan,
@@ -132,4 +150,6 @@ def generate_launch_description():
         slam,
         slam_activate,
         slam_configure,
+        ground_segmentation,
+        obstacle_predictor,
     ])

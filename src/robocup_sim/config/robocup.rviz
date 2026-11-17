@@ -138,6 +138,39 @@ Visualization Manager:
         Durability Policy: Volatile
         History Policy: Keep Last
         Reliability Policy: Reliable
+    - Class: rviz_default_plugins/PointCloud2
+      Name: Obstacle points
+      Enabled: false
+      Topic:
+        Value: /ground_segmentation/obstacle_points
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Best Effort
+      Size (m): 0.03
+      Style: Points
+      Size (Pixels): 3
+      Color Transformer: FlatColor
+      Color: 255; 170; 0
+      Decay Time: 0
+    - Class: rviz_default_plugins/MarkerArray
+      Name: Predicted obstacles
+      Enabled: true
+      Topic:
+        Value: /predicted_obstacle_markers
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+    - Class: rviz_default_plugins/MarkerArray
+      Name: Obstacle velocity
+      Enabled: true
+      Topic:
+        Value: /predicted_obstacle_velocity_marker
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
   Global Options:
     Fixed Frame: odom
     Background Color: 48; 48; 48

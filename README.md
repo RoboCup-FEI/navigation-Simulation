@@ -54,6 +54,7 @@ The workspace is built automatically on the first `./run.sh`
 ./run.sh --model v1             # original robot model (default: v2)
 ./run.sh --world empty --person "3,-3 3,3"   # empty floor, a pedestrian walking between points
 ./run.sh --world empty --person "3,-3 3,3" --person-speed 0.7
+./run.sh --world empty --person "3,-3 3,3" --predictor   # + ground segmentation and the obstacle predictor
 ```
 
 `run.sh` starts Isaac Sim, waits until it publishes `/clock` (the first start
@@ -125,6 +126,12 @@ there is no static map or global localisation.
 
 ## Simulation notes
 
+- **Obstacle predictor** (`--predictor`). The Hesai cloud goes through
+  `ground_segmentation_ros2` (as on the real robot, `config/ground_segmentation/hesai.yaml`,
+  Hesai 0.449 m above the floor) into `dynamic_obstacle_predictor`
+  (`src/obstacle_predictor`, a copy from the MRVK workspace with its config), which
+  publishes `/detected_obstacle_pose`, `/predicted_obstacle_path` and the
+  `/predicted_obstacle_*` markers shown in RViz.
 - **Pedestrian** (`--person`, `robocup_people.py`). An animated character
   (`M_Medical_01`) from the NVIDIA assets, downloaded from S3 on the first
   run, walks back and forth between the given points (IsaacSim Replicator
