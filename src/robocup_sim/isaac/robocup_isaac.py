@@ -244,6 +244,8 @@ def create_base_graph(articulation):
                 ('Odom', 'isaacsim.core.nodes.IsaacComputeOdometry'),
                 ('PubOdom', 'isaacsim.ros2.bridge.ROS2PublishOdometry'),
                 ('PubTF', 'isaacsim.ros2.bridge.ROS2PublishRawTransformTree'),
+                ('Joints', 'isaacsim.sensors.physics.IsaacReadJointState'),
+                ('PubJoints', 'isaacsim.ros2.bridge.ROS2PublishJointState'),
             ],
             keys.SET_VALUES: [
                 ('SimTime.inputs:resetOnStop', True),
@@ -254,6 +256,8 @@ def create_base_graph(articulation):
                 ('PubOdom.inputs:chassisFrameId', 'base_link'),
                 ('PubTF.inputs:parentFrameId', 'odom'),
                 ('PubTF.inputs:childFrameId', 'base_link'),
+                ('Joints.inputs:prim', target),
+                ('PubJoints.inputs:topicName', '/joint_states'),
             ],
             keys.CONNECT: [
                 ('Tick.outputs:tick', 'CmdVel.inputs:execIn'),
@@ -271,6 +275,18 @@ def create_base_graph(articulation):
                 ('Context.outputs:context', 'PubTF.inputs:context'),
                 ('SimTime.outputs:simulationTime', 'PubOdom.inputs:timeStamp'),
                 ('SimTime.outputs:simulationTime', 'PubTF.inputs:timeStamp'),
+                # joint_states s tou istou peciatkou ako TF odom->base_link, inak RViz
+                # kresli kolesa podla starsej pozy tela a pri jazde zaostavaju
+                ('Tick.outputs:tick', 'Joints.inputs:execIn'),
+                ('Joints.outputs:execOut', 'PubJoints.inputs:execIn'),
+                ('Joints.outputs:jointNames', 'PubJoints.inputs:jointNames'),
+                ('Joints.outputs:jointPositions', 'PubJoints.inputs:jointPositions'),
+                ('Joints.outputs:jointVelocities', 'PubJoints.inputs:jointVelocities'),
+                ('Joints.outputs:jointEfforts', 'PubJoints.inputs:jointEfforts'),
+                ('Joints.outputs:jointDofTypes', 'PubJoints.inputs:jointDofTypes'),
+                ('Joints.outputs:stageMetersPerUnit', 'PubJoints.inputs:stageMetersPerUnit'),
+                ('Context.outputs:context', 'PubJoints.inputs:context'),
+                ('SimTime.outputs:simulationTime', 'PubJoints.inputs:timeStamp'),
             ],
         },
     )

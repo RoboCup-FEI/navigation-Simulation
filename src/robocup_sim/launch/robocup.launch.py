@@ -38,10 +38,6 @@ def generate_launch_description():
         parameters=[{'robot_description': ParameterValue(Command(['xacro ', model]), value_type=str),
                      'use_sim_time': True}],
     )
-    joint_state_publisher = Node(
-        package='joint_state_publisher', executable='joint_state_publisher',
-        output='screen', parameters=[use_sim_time],
-    )
     # /scan pre Nav2 a slam_toolbox: v1 z 2D lidaru, v2 rez point cloudu Hesai XT16
     scan_relay = Node(
         package='robocup_sim', executable='scan_no_hit_to_inf.py', output='screen',
@@ -128,7 +124,6 @@ def generate_launch_description():
         DeclareLaunchArgument('slam', default_value='true',
                               description='Pri nav:=true aj slam_toolbox (mapa pre RViz)'),
         robot_state_publisher,
-        joint_state_publisher,
         scan_relay,
         hesai_to_scan,
         rviz,
