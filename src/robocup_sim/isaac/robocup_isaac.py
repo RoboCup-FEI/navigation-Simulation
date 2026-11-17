@@ -279,7 +279,11 @@ def create_base_graph(articulation):
 class KinematicBase:
 
     def __init__(self, articulation, height):
-        self.robot = Articulation(articulation)
+        # Articulation az v prvom kroku: physics views existuju az po play(), ale
+        # podvozok musi drzat robota uz od prveho kroku, inak sa pred nim robot
+        # pohne a odometria si zoberie naklonenu pociatocnu pozu
+        self.path = articulation
+        self.robot = None
         self.height = height
         self.lin = og.Controller.attribute(CMD_VEL_NODE + '.outputs:linearVelocity')
         self.ang = og.Controller.attribute(CMD_VEL_NODE + '.outputs:angularVelocity')
@@ -291,6 +295,8 @@ class KinematicBase:
         return current + max(-step, min(step, target - current))
 
     def step(self):
+        if self.robot is None:
+            self.robot = Articulation(self.path)
         self.v = self._ramp(self.v, float(self.lin.get()[0]), MAX_ACCELERATION)
         self.w = self._ramp(self.w, float(self.ang.get()[2]), MAX_ANGULAR_ACCELERATION)
         positions, orientations = self.robot.get_world_poses()
@@ -349,11 +355,11 @@ def main():
         robocup_sensors.create_sensor_graphs(sensors)
     simulation_app.update()
 
-    app_utils.play()
-    simulation_app.update()
     base = KinematicBase(articulation, height)
     SimulationManager.register_callback(lambda dt, context: base.step(),
                                         event=SimulationEvent.PHYSICS_PRE_STEP)
+    app_utils.play()
+    simulation_app.update()
     print('[robocup_isaac] simulation running', flush=True)
     frame = 0
     while simulation_app.is_running():
