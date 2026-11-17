@@ -3,7 +3,7 @@
 <package format="3">
   <name>obstacle_predictor</name>
   <version>0.0.0</version>
-  <description>Dynamic obstacle detection, tracking and prediction from a ground-segmented point cloud (copy of dynamic_obstacle_predictor from the MRVK workspace).</description>
+  <description>Dynamic obstacle detection, tracking and prediction from a ground-segmented point cloud, and the Nav2 costmap layer that marks the predicted paths (copies of dynamic_obstacle_predictor and PredictedPathObstacleLayer from the MRVK workspace).</description>
   <maintainer email="adam.eliasdk@gmail.com">adam</maintainer>
   <license>MIT</license>
 
@@ -17,6 +17,8 @@
   <depend>tf2</depend>
   <depend>tf2_ros</depend>
   <depend>tf2_geometry_msgs</depend>
+  <depend>nav2_costmap_2d</depend>
+  <depend>pluginlib</depend>
 
   <export>
     <build_type>ament_cmake</build_type>

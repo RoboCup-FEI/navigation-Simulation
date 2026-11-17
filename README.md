@@ -132,6 +132,9 @@ there is no static map or global localisation.
   (`src/obstacle_predictor`, a copy from the MRVK workspace with its config), which
   publishes `/detected_obstacle_pose`, `/predicted_obstacle_path` and the
   `/predicted_obstacle_*` markers shown in RViz.
+  With `--nav` the local costmap also has `PredictedPathObstacleLayer`
+  (same package), which marks the predicted paths from
+  `/predicted_obstacle_markers` as lethal; without the predictor the layer stays empty.
 - **Pedestrian** (`--person`, `robocup_people.py`). An animated character
   (`M_Medical_01`) from the NVIDIA assets, downloaded from S3 on the first
   run, walks back and forth between the given points (IsaacSim Replicator
