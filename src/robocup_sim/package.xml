@@ -28,6 +28,7 @@
   <exec_depend>slam_toolbox</exec_depend>
   <exec_depend>ground_segmentation_ros2</exec_depend>
   <exec_depend>obstacle_predictor</exec_depend>
+  <exec_depend>social_nav2_plugins</exec_depend>
   <exec_depend>pointcloud_to_laserscan</exec_depend>
   <exec_depend>launch_ros</exec_depend>
   <exec_depend>lifecycle_msgs</exec_depend>

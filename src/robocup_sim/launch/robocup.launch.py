@@ -121,6 +121,12 @@ def generate_launch_description():
         condition=predictor_condition,
     )
 
+    person_follower = Node(
+        package='robocup_sim', executable='person_follower.py', name='person_follower',
+        output='screen', parameters=[use_sim_time],
+        condition=IfCondition(LaunchConfiguration('follow')),
+    )
+
     return LaunchDescription([
         DeclareLaunchArgument('rmw', default_value='rmw_fastrtps_cpp',
                               description='RMW, musi sediet s bridgeom v Isaacu'),
@@ -139,6 +145,8 @@ def generate_launch_description():
                               description='Lokalny planner Nav2: dwb | teb | tr'),
         DeclareLaunchArgument('slam', default_value='true',
                               description='Pri nav:=true aj slam_toolbox (mapa pre RViz)'),
+        DeclareLaunchArgument('follow', default_value='false',
+                              description='Nasledovanie cloveka (potrebuje nav:=true predictor:=true)'),
         DeclareLaunchArgument('predictor', default_value='false',
                               description='Segmentacia zeme z Hesai + dynamic_obstacle_predictor'),
         robot_state_publisher,
@@ -152,4 +160,5 @@ def generate_launch_description():
         slam_configure,
         ground_segmentation,
         obstacle_predictor,
+        person_follower,
     ])

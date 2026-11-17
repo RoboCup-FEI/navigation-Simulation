@@ -8,6 +8,7 @@
 #   ./run.sh --nav --planner dwb    lokalny planner: teb (default) | dwb | tr
 #   ./run.sh --model v1      povodny model robota (default v2)
 #   ./run.sh --predictor     segmentacia zeme z Hesai + dynamic_obstacle_predictor
+#   ./run.sh --follow        robot nasleduje cloveka (zapne aj --nav a --predictor)
 #   ./run.sh --headless      ostatne volby idu do Isaac skriptu
 #                            (--headless, --x, --y, --yaw, --world SUBOR.usd|empty,
 #                             --person "x1,y1 x2,y2", --person-speed M_S)
@@ -27,6 +28,7 @@ STARTUP_TIMEOUT=600
 BUILD=0
 NAV=false
 PREDICTOR=false
+FOLLOW=false
 PLANNER=teb
 MODEL=v2
 ISAAC_ARGS=()
@@ -35,6 +37,7 @@ while [ $# -gt 0 ]; do
         --build) BUILD=1 ;;
         --nav) NAV=true ;;
         --predictor) PREDICTOR=true ;;
+        --follow) FOLLOW=true; NAV=true; PREDICTOR=true ;;
         --planner) PLANNER="$2"; shift ;;
         --model) MODEL="$2"; shift ;;
         *) ISAAC_ARGS+=("$1") ;;
@@ -95,7 +98,7 @@ if ((t >= STARTUP_TIMEOUT)); then
 fi
 
 echo "[run.sh] starting ROS 2 side"
-ros "exec ros2 launch robocup_sim robocup.launch.py nav:=$NAV planner:=$PLANNER model:=$MODEL predictor:=$PREDICTOR" &
+ros "exec ros2 launch robocup_sim robocup.launch.py nav:=$NAV planner:=$PLANNER model:=$MODEL predictor:=$PREDICTOR follow:=$FOLLOW" &
 LAUNCH_PID=$!
 
 wait -n "$ISAAC_PID" "$LAUNCH_PID" || true

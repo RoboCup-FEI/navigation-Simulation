@@ -55,6 +55,7 @@ The workspace is built automatically on the first `./run.sh`
 ./run.sh --world empty --person "3,-3 3,3"   # empty floor, a pedestrian walking between points
 ./run.sh --world empty --person "3,-3 3,3" --person-speed 0.7
 ./run.sh --world empty --person "3,-3 3,3" --predictor   # + ground segmentation and the obstacle predictor
+./run.sh --world empty --person "2,-5 12,-5 12,5 2,5" --person-speed 0.8 --follow   # robot follows the pedestrian
 ```
 
 `run.sh` starts Isaac Sim, waits until it publishes `/clock` (the first start
@@ -135,6 +136,21 @@ there is no static map or global localisation.
   With `--nav` the local costmap also has `PredictedPathObstacleLayer`
   (same package), which marks the predicted paths from
   `/predicted_obstacle_markers` as lethal; without the predictor the layer stays empty.
+- **Social costmap** (`src/social_nav2_plugins`, `src/social_nav2_msgs`). The two
+  costmap layers of [social_nav2](https://github.com/jginesclavero/social_nav2)
+  (Apache-2.0), ported to Jazzy: `PeopleFilterLayer` removes the cells the
+  obstacle layer marked on a person and `SocialLayer` adds a proxemic zone, an
+  asymmetric Gaussian oriented by the walking direction (intimate zone 0.45 m,
+  personal 1.2 m, longer in front than behind). People come from TF frames
+  `agent_<id>`, which the predictor publishes for every moving track with the
+  heading of its velocity. Port changes: Jazzy Nav2 layer API, the costmap's TF
+  buffer, no debug costmap publisher, and people whose TF is older than
+  `max_agent_age` (0.5 s) are dropped instead of staying forever. Local costmap
+  layers: obstacle, people filter, predicted paths, inflation, social.
+- **Following** (`--follow`, `scripts/person_follower.py`, implies `--nav --predictor`).
+  Every 0.5 s it sends a Nav2 goal on `/goal_pose` 1 m in front of the detected
+  person on the line to the robot, facing the person, unless the robot is
+  already within 1.3 m or the person was not seen for 2 s.
 - **Pedestrian** (`--person`, `robocup_people.py`). An animated character
   (`M_Medical_01`) from the NVIDIA assets, downloaded from S3 on the first
   run, walks back and forth between the given points (IsaacSim Replicator

@@ -31,6 +31,7 @@
 
 #include <tf2_ros/transform_listener.h>
 #include <tf2_ros/buffer.h>
+#include <tf2_ros/transform_broadcaster.h>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 
 #include <vector>
@@ -174,6 +175,7 @@ public:
     {
         tf_buffer_ = std::make_shared<tf2_ros::Buffer>(this->get_clock());
         tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
+        tf_broadcaster_ = std::make_shared<tf2_ros::TransformBroadcaster>(*this);
 
         loadParams();
         setupIO();
@@ -257,6 +259,10 @@ private:
         initial_expected_range_ = declare_parameter<double>("initial_expected_range", 2.0);
         max_association_distance_ = declare_parameter<double>("max_association_distance", 1.5);
         publish_debug_segment_ = declare_parameter<bool>("publish_debug_segment", true);
+        // TF <agent_tf_prefix><id> for every moving track, yaw = heading of its velocity
+        // (input of the social_nav2 costmap layers)
+        publish_agent_tf_ = declare_parameter<bool>("publish_agent_tf", true);
+        agent_tf_prefix_ = declare_parameter<std::string>("agent_tf_prefix", "agent_");
         max_tracks_ = declare_parameter<int>("max_tracks", 5);
     }
 
@@ -1490,6 +1496,18 @@ private:
             {
                 marker_array.markers.push_back(lineStripMarkerFor(pred, header, t.id));
                 velocity_array.markers.push_back(velocityMarkerFor(pred, stamp, t.id));
+                if (publish_agent_tf_)
+                {
+                    geometry_msgs::msg::TransformStamped tf;
+                    tf.header = header;
+                    tf.child_frame_id = agent_tf_prefix_ + std::to_string(t.id);
+                    tf.transform.translation.x = pred.origin.x;
+                    tf.transform.translation.y = pred.origin.y;
+                    const double yaw = std::atan2(pred.vy, pred.vx);
+                    tf.transform.rotation.z = std::sin(yaw / 2.0);
+                    tf.transform.rotation.w = std::cos(yaw / 2.0);
+                    tf_broadcaster_->sendTransform(tf);
+                }
             }
             else
             {
@@ -1669,6 +1687,9 @@ private:
 
     std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
     std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
+    std::shared_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
+    bool publish_agent_tf_{true};
+    std::string agent_tf_prefix_;
 
     std::string obstacle_cloud_topic_;
     std::string output_frame_;

@@ -5,6 +5,7 @@ find_package(ament_cmake REQUIRED)
 
 install(PROGRAMS
   scripts/scan_no_hit_to_inf.py
+  scripts/person_follower.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
