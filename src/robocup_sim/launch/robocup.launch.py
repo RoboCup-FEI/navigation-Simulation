@@ -143,7 +143,7 @@ def generate_launch_description():
                               description='Nav2 + slam_toolbox, ciel cez 2D Goal Pose v RViz'),
         DeclareLaunchArgument('planner', default_value='teb',
                               description='Lokalny planner Nav2: dwb | teb | tr'),
-        DeclareLaunchArgument('slam', default_value='true',
+        DeclareLaunchArgument('slam', default_value='false',
                               description='Pri nav:=true aj slam_toolbox (mapa pre RViz)'),
         DeclareLaunchArgument('follow', default_value='false',
                               description='Nasledovanie cloveka (potrebuje nav:=true predictor:=true)'),

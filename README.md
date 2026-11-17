@@ -45,7 +45,8 @@ The workspace is built automatically on the first `./run.sh`
 
 ```bash
 ./run.sh                        # arena + robot, RViz, steering GUI
-./run.sh --nav                  # + Nav2 and slam_toolbox (TEB local planner)
+./run.sh --nav                  # + Nav2 (TEB local planner)
+./run.sh --nav --slam           # + slam_toolbox (map for RViz only, off by default)
 ./run.sh --nav --planner dwb    # local planner: teb (default) | dwb | tr
 ./run.sh --headless             # Isaac without a window (RViz still opens)
 ./run.sh --x 2 --y -1 --yaw 1.57    # spawn pose
@@ -91,7 +92,7 @@ Common to both models:
 | `/scan` | → Nav2, slam_toolbox | `sensor_msgs/LaserScan`, source depends on the model (below) |
 | `/cmd_vel` | → Isaac | `geometry_msgs/Twist` |
 | TF `base_link → …` | robot_state_publisher | from `robocup_description` |
-| TF `map → odom`, `/map` | slam_toolbox (`--nav`) | visualisation only |
+| TF `map → odom`, `/map` | slam_toolbox (`--nav --slam`) | visualisation only; off by default, it maps passing people and moved doors as black cells |
 
 Model v1 (`robot.urdf.xacro`):
 
@@ -267,7 +268,7 @@ base_link                     centre of the body box, 0.1698 m above the floor
 ```
 
 TF tree of the running simulation (`ros2 run tf2_tools view_frames`, model v2
-with `--nav`): `map → odom` from slam_toolbox, `odom → base_link` from Isaac,
+with `--nav --slam`): `map → odom` from slam_toolbox, `odom → base_link` from Isaac,
 the rest from robot_state_publisher.
 
 ![TF tree of model v2](docs/tf_tree_v2.png)

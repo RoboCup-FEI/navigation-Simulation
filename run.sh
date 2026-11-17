@@ -4,7 +4,8 @@
 #
 #   ./run.sh                 pri prvom behu zbuilduje ws, potom spusti vsetko
 #   ./run.sh --build         najprv prebuilduje ws
-#   ./run.sh --nav           aj Nav2 + slam_toolbox (ciel cez 2D Goal Pose v RViz)
+#   ./run.sh --nav           aj Nav2 (ciel cez 2D Goal Pose v RViz)
+#   ./run.sh --nav --slam    aj slam_toolbox (len mapa pre RViz, navigacia ho nepouziva)
 #   ./run.sh --nav --planner dwb    lokalny planner: teb (default) | dwb | tr
 #   ./run.sh --model v1      povodny model robota (default v2)
 #   ./run.sh --predictor     segmentacia zeme z Hesai + dynamic_obstacle_predictor
@@ -29,6 +30,7 @@ BUILD=0
 NAV=false
 PREDICTOR=false
 FOLLOW=false
+SLAM=false
 PLANNER=teb
 MODEL=v2
 ISAAC_ARGS=()
@@ -36,6 +38,7 @@ while [ $# -gt 0 ]; do
     case "$1" in
         --build) BUILD=1 ;;
         --nav) NAV=true ;;
+        --slam) SLAM=true ;;
         --predictor) PREDICTOR=true ;;
         --follow) FOLLOW=true; NAV=true; PREDICTOR=true ;;
         --planner) PLANNER="$2"; shift ;;
@@ -98,7 +101,7 @@ if ((t >= STARTUP_TIMEOUT)); then
 fi
 
 echo "[run.sh] starting ROS 2 side"
-ros "exec ros2 launch robocup_sim robocup.launch.py nav:=$NAV planner:=$PLANNER model:=$MODEL predictor:=$PREDICTOR follow:=$FOLLOW" &
+ros "exec ros2 launch robocup_sim robocup.launch.py nav:=$NAV planner:=$PLANNER model:=$MODEL predictor:=$PREDICTOR follow:=$FOLLOW slam:=$SLAM" &
 LAUNCH_PID=$!
 
 wait -n "$ISAAC_PID" "$LAUNCH_PID" || true
