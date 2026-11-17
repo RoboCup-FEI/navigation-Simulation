@@ -8,7 +8,9 @@
 #   ./run.sh --nav --planner dwb    lokalny planner: teb (default) | dwb | tr
 #   ./run.sh --model v1      povodny model robota (default v2)
 #   ./run.sh --headless      ostatne volby idu do Isaac skriptu
-#                            (--headless, --x, --y, --yaw, --world SUBOR.usd)
+#                            (--headless, --x, --y, --yaw, --world SUBOR.usd|empty,
+#                             --person "x1,y1 x2,y2", --person-speed M_S)
+#   ./run.sh --world empty --person "3,-3 3,3"   prazdny svet a chodec medzi bodmi
 #
 # Obe strany bezia v cistom prostredi len s /opt/ros/$ROS_DISTRO (default
 # jazzy) a tymto ws, aby

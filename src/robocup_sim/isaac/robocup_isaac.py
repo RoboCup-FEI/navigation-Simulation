@@ -31,7 +31,8 @@ DEFAULT_WORLD = os.path.join(
     WS, 'src/robocup_sim/worlds/robocup_arena/2026_09_01_RoboCup_HCC_Arena_V1.usd')
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--world', default=DEFAULT_WORLD, help='USD prostredie')
+parser.add_argument('--world', default=DEFAULT_WORLD,
+                    help="USD prostredie, alebo 'empty' (len podlaha 50 x 50 m)")
 parser.add_argument('--headless', action='store_true')
 # stred chodby: v (0, 0) zadny roh robota v2 zasahuje do ramu dveri a PhysX ho pri
 # starte z prekryvu odhodi (posun o centimetre, natocenie o 5-13 deg)
@@ -39,9 +40,14 @@ parser.add_argument('--x', type=float, default=1.0)
 parser.add_argument('--y', type=float, default=0.0)
 parser.add_argument('--yaw', type=float, default=0.0)
 parser.add_argument('--model', choices=['v1', 'v2'], default='v2', help='Model robota')
+parser.add_argument('--person', default='', help='Body chodca "x1,y1 x2,y2 ..."')
+parser.add_argument('--person-speed', type=float, default=1.0, help='Rychlost chodca [m/s]')
 parser.add_argument('--frames', type=int, default=0,
                     help='Skonci po tolkych snimkach (0 = bez konca)')
 args, _ = parser.parse_known_args()
+PERSON = [tuple(float(v) for v in p.split(',')) for p in args.person.split()]
+if len(PERSON) == 1:
+    parser.error('--person potrebuje aspon dva body')
 
 simulation_app = SimulationApp({'headless': args.headless})
 
@@ -49,6 +55,9 @@ import isaacsim.core.experimental.utils.app as app_utils
 
 for ext in ('omni.scene.optimizer.core', 'isaacsim.robot.schema', 'isaacsim.ros2.bridge'):
     app_utils.enable_extension(ext)
+if PERSON:
+    import robocup_people
+    robocup_people.enable_extensions()
 simulation_app.update()
 
 import omni.graph.core as og
@@ -87,6 +96,19 @@ def build_world(stage, usd_file):
     sun = UsdLux.DistantLight.Define(stage, '/World/Sun')
     sun.CreateIntensityAttr(2000.0)
     UsdGeom.XformCommonAPI(sun).SetRotate((30.0, 20.0, 0.0))
+
+    if usd_file == 'empty':
+        h = 25.0
+        floor = UsdGeom.Mesh.Define(stage, '/World/ground')
+        floor.CreatePointsAttr([(-h, -h, 0.0), (h, -h, 0.0), (h, h, 0.0), (-h, h, 0.0)])
+        floor.CreateFaceVertexCountsAttr([4])
+        floor.CreateFaceVertexIndicesAttr([0, 1, 2, 3])
+        floor.CreateNormalsAttr([(0.0, 0.0, 1.0)] * 4)
+        floor.CreateDisplayColorAttr([(0.6, 0.6, 0.6)])
+        UsdPhysics.CollisionAPI.Apply(floor.GetPrim())
+        ViewportManager.set_camera_view('/OmniverseKit_Persp', eye=[-6.0, -6.0, 6.0],
+                                        target=[0.0, 0.0, 0.0])
+        return
 
     ground = UsdGeom.Cube.Define(stage, '/World/ground')
     UsdGeom.XformCommonAPI(ground).SetTranslate((0.0, 0.0, -0.05))
@@ -345,6 +367,9 @@ def main():
     stage.SetDefaultPrim(UsdGeom.Xform.Define(stage, '/World').GetPrim())
 
     build_world(stage, args.world)
+    if PERSON:
+        robocup_people.bake_navmesh(stage, half_size=12.0)
+        robocup_people.add_person(simulation_app, stage, PERSON, args.person_speed)
 
     usd_file, urdf = import_robot()
     height = base_height(urdf)

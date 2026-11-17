@@ -52,6 +52,8 @@ The workspace is built automatically on the first `./run.sh`
 ./run.sh --world other.usd      # another USD environment
 ./run.sh --build                # rebuild the workspace first
 ./run.sh --model v1             # original robot model (default: v2)
+./run.sh --world empty --person "3,-3 3,3"   # empty floor, a pedestrian walking between points
+./run.sh --world empty --person "3,-3 3,3" --person-speed 0.7
 ```
 
 `run.sh` starts Isaac Sim, waits until it publishes `/clock` (the first start
@@ -122,6 +124,14 @@ there is no static map or global localisation.
   Humble and Jazzy, see below.
 
 ## Simulation notes
+
+- **Pedestrian** (`--person`, `robocup_people.py`). An animated character
+  (`M_Medical_01`) from the NVIDIA assets, downloaded from S3 on the first
+  run, walks back and forth between the given points (IsaacSim Replicator
+  Agent `patrol` behaviour on a baked navmesh). The Hesai sees it. Its IRA
+  collider is only a trigger, so the robot drives through it. The navmesh is
+  baked from meshes only, which is why the empty world's floor is a mesh.
+  Isaac with a pedestrian needs ~2 GB more RAM.
 
 - **Kinematic base.** `/cmd_vel` is applied directly as the chassis velocity
   (acceleration-limited to 2 m/s²) and the chassis is kept level; the wheels are
