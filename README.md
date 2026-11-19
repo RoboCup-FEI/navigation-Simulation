@@ -1,3 +1,4 @@
+[demo_2026-11-19.webm](https://github.com/user-attachments/assets/999debef-3e80-4632-90cf-dd568baf9424)
 # robocup_ws
 
 > Táto vetva je priamym pokračovaním Filipovej vetvy `ros2-jazzy-isaac-sim`.
