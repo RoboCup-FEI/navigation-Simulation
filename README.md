@@ -83,4 +83,4 @@ stiahne postavu z internetu a Isaac potom potrebuje ~2 GB RAM navyše.
 - Navigácia beží v `odom`, globálna lokalizácia nie je.
 - Kolízia chodca je len trigger, robot cez neho prejde.
 - Predikcia a sociálna zóna existujú len pri pohybujúcom sa človeku.
-- Isaac občas spadne na chybe GPU `DEVICE_LOST`.
+- Isaac občas spadne na chybe GPU `DEVICE_LOST`(klasika)_
