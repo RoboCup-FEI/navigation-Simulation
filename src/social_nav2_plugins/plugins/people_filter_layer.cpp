@@ -14,6 +14,7 @@
 
 // Author: jginesclavero
 
+#include <limits>
 #include "social_nav2_plugins/people_filter_layer.hpp"
 
 #include <algorithm>
@@ -89,7 +90,7 @@ PeopleFilterLayer::updateBounds(
 
   if (!enabled_) {return;}
   getFrameNames();
-  clearArea(0, 0, getSizeInCellsX(), getSizeInCellsY(), true);
+  resetMap(0, 0, getSizeInCellsX(), getSizeInCellsY());
   useExtraBounds(min_x, min_y, max_x, max_y);
   bool current = true;
 
@@ -103,10 +104,12 @@ PeopleFilterLayer::updateBounds(
     RCLCPP_DEBUG(logger_, "Agents vector size is 0");
   }
 
+  double b[4] = {std::numeric_limits<double>::infinity(), std::numeric_limits<double>::infinity(), -std::numeric_limits<double>::infinity(), -std::numeric_limits<double>::infinity()};
   for (auto agent : agents) {
     agentFilter(agent, filter_radius_);
-    doTouch(agent, min_x, min_y, max_x, max_y);
+    doTouch(agent, &b[0], &b[1], &b[2], &b[3]);
   }
+  touchWithPrevious(b, min_x, min_y, max_x, max_y);
 }
 
 void
@@ -201,6 +204,21 @@ PeopleFilterLayer::reset()
 {
   resetMaps();
   current_ = true;
+}
+
+void
+PeopleFilterLayer::touchWithPrevious(
+  const double * b, double * min_x, double * min_y, double * max_x, double * max_y)
+{
+  // the cells drawn last cycle must be reset in the master costmap too
+  for (const double * p : std::initializer_list<const double *>{b, last_bounds_}) {
+    if (p[0] > p[2]) {continue;}
+    *min_x = std::min(*min_x, p[0]);
+    *min_y = std::min(*min_y, p[1]);
+    *max_x = std::max(*max_x, p[2]);
+    *max_y = std::max(*max_y, p[3]);
+  }
+  std::copy(b, b + 4, last_bounds_);
 }
 
 }  // namespace nav2_costmap_2d

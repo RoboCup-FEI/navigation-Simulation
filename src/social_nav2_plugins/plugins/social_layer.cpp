@@ -14,6 +14,7 @@
 
 // Author: jginesclavero
 
+#include <limits>
 #include "social_nav2_plugins/social_layer.hpp"
 
 #include <algorithm>
@@ -201,7 +202,7 @@ SocialLayer::updateBounds(
     updateOrigin(robot_x - getSizeInMetersX() / 2, robot_y - getSizeInMetersY() / 2);
   }
 
-  clearArea(0, 0, getSizeInCellsX(), getSizeInCellsY(), true);
+  resetMap(0, 0, getSizeInCellsX(), getSizeInCellsY());
 
   useExtraBounds(min_x, min_y, max_x, max_y);
   bool current = true;
@@ -212,10 +213,12 @@ SocialLayer::updateBounds(
   // update the global current status
   current_ = current;
 
+  double b[4] = {std::numeric_limits<double>::infinity(), std::numeric_limits<double>::infinity(), -std::numeric_limits<double>::infinity(), -std::numeric_limits<double>::infinity()};
   for (auto agent : agents_) {
     setProxemics(agent.second, personal_z_radius_, gaussian_amplitude_);
-    doTouch(agent.second.tf, min_x, min_y, max_x, max_y);
+    doTouch(agent.second.tf, &b[0], &b[1], &b[2], &b[3]);
   }
+  touchWithPrevious(b, min_x, min_y, max_x, max_y);
 
   if (footprint_clearing_enabled_) {
     setConvexPolygonCost(transformed_footprint_, nav2_costmap_2d::FREE_SPACE);
@@ -262,7 +265,7 @@ SocialLayer::doTouch(
     agent.getOrigin().x(),
     agent.getOrigin().y(),
     agent.getRotation().getAngle(),
-    makeFootprintFromRadius(intimate_z_radius_),
+    makeFootprintFromRadius(personal_z_radius_),
     footprint);
   for (unsigned int i = 0; i < footprint.size(); i++) {
     touch(footprint[i].x, footprint[i].y, min_x, min_y, max_x, max_y);
@@ -485,6 +488,21 @@ SocialLayer::reset()
 {
   resetMaps();
   current_ = true;
+}
+
+void
+SocialLayer::touchWithPrevious(
+  const double * b, double * min_x, double * min_y, double * max_x, double * max_y)
+{
+  // the cells drawn last cycle must be reset in the master costmap too
+  for (const double * p : std::initializer_list<const double *>{b, last_bounds_}) {
+    if (p[0] > p[2]) {continue;}
+    *min_x = std::min(*min_x, p[0]);
+    *min_y = std::min(*min_y, p[1]);
+    *max_x = std::max(*max_x, p[2]);
+    *max_y = std::max(*max_y, p[3]);
+  }
+  std::copy(b, b + 4, last_bounds_);
 }
 
 }  // namespace nav2_costmap_2d

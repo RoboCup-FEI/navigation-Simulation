@@ -17,6 +17,7 @@
 #ifndef social_nav2_PLUGINS__PEOPLE_FILTER_LAYER_HPP_
 #define social_nav2_PLUGINS__PEOPLE_FILTER_LAYER_HPP_
 
+#include <limits>
 #include <memory>
 #include <string>
 #include <vector>
@@ -96,6 +97,9 @@ protected:
   std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
   std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
   double max_agent_age_{0.5};
+  double last_bounds_[4] = {std::numeric_limits<double>::infinity(), std::numeric_limits<double>::infinity(),
+    -std::numeric_limits<double>::infinity(), -std::numeric_limits<double>::infinity()};
+  void touchWithPrevious(const double * b, double * min_x, double * min_y, double * max_x, double * max_y);
 };
 
 }  // namespace nav2_costmap_2d
