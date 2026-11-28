@@ -1,18 +1,6 @@
-# Senzory modelu v2 (robot_v2.urdf.xacro) v Isaac Sim, parametre podla
-# specifikacii vyrobcov:
-#   Hesai XT16               -> /hesai/points  (PointCloud2, hesai_frame)
-#   Livox Horizon, len vstavana IMU (BMI088)
-#                            -> /livox/imu     (Imu, livox_frame)
-#     Samotny Livox lidar sa nesimuluje: solid state lidar s vlastnymi lucmi
-#     v Isaac Sim 6.2 nepublikoval ziadne data.
-#   Basler a2A1920-160ucPRO  -> /camera/image_raw, /camera/camera_info
-#                               (camera_optical_frame)
-#
-# Polohy senzorov sa citaju z URDF (retazec jointov od frame po base_link),
-# senzory su deti prim base_link, takze sa hybu s robotom.
-#
-# Importuje ho robocup_isaac.py az po starte SimulationApp.
 import math
+import yaml
+import os
 import xml.etree.ElementTree as ET
 
 import omni.graph.core as og
@@ -23,30 +11,12 @@ from isaacsim.sensors.experimental.physics import IMU
 from isaacsim.sensors.experimental.rtx import Lidar
 from pxr import Gf, Sdf, UsdGeom, Vt
 
-EMITTER_STATE = 'OmniSensorGenericLidarCoreEmitterStateAPI:s001'
+# config v zdrojakoch: isaac/../config/slam/sensors/sensors.yaml
+SENSORS_YAML = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            '..', 'config', 'sensors', 'sensors.yaml')
 CORE = 'omni:sensor:Core:'
 EMITTER = CORE + 'emitterState:s001:'
-# nie je v schema OmniLidar, ale profily ho maju (rotary lidar: vystrely za sekundu)
-REPORT_RATE = CORE + 'reportRateBaseHz'
-
-# Hesai XT16 (Pandar XT16 user manual): 16 kanalov s krokom 2 deg (+15..-15 deg),
-# 360 deg, 10 Hz, horizontalne rozlisenie 0.18 deg, dosah 0.05-120 m, presnost 1 cm,
-# 905 nm, single return 320 000 bodov/s
-HESAI_ELEVATIONS = [15.0 - 2.0 * i for i in range(16)]
-HESAI_HZ = 10
-HESAI_AZIMUTH_RES_DEG = 0.18
-
-# Basler a2A1920-160ucPRO: Sony IMX392, 1920 x 1200 px, pixel 3.45 um.
-# Objektiv nie je znamy, ohniskova vzdialenost je odhad (6 mm -> ~58 x 38 deg).
-CAMERA_SENSOR_PX = (1920, 1200)
-# Obraz sa kresli zmenseny: render 1920 x 1200 v kazdom snimku spomali simulaciu
-# na ~0.2x realneho casu, 640 x 400 na ~0.6x (RTX 3060 Laptop). Zorne pole je
-# rovnake, urcuje ho velkost senzora, nie pocet pixelov obrazu.
-CAMERA_RESOLUTION = (640, 400)
-CAMERA_PIXEL_MM = 0.00345
-CAMERA_FOCAL_MM = 6.0
-
-
+EMITTER_STATE = 'OmniSensorGenericLidarCoreEmitterStateAPI:s001'
 def frame_pose(urdf, frame):
     """Pose of a URDF link in base_link as Gf.Matrix4d (row-vector convention)."""
     joints = {j.find('child').get('link'): j for j in ET.parse(urdf).getroot().iter('joint')}
@@ -64,7 +34,6 @@ def frame_pose(urdf, frame):
         link = joint.find('parent').get('link')
     return pose
 
-
 def set_local_pose(stage, path, pose):
     xform = UsdGeom.Xformable(stage.GetPrimAtPath(path))
     xform.ClearXformOpOrder()
@@ -72,71 +41,87 @@ def set_local_pose(stage, path, pose):
     xform.AddOrientOp(UsdGeom.XformOp.PrecisionDouble).Set(pose.ExtractRotationQuat())
 
 
-def create_lidar(stage, path, pose, hz, attributes):
-    # accumulate_outputs: jedna sprava = cela otocka, nie cast za jeden render frame
+def load_yaml(path):
+    with open(path) as f:
+        return yaml.safe_load(f)
+
+def load_sensor_configs(path):
+    config = load_yaml(path)
+    folder = os.path.dirname(path)
+    for group in ('lidars', 'imus'):
+        for sensor in config.get(group, []):
+            sensor['params'] = load_yaml(os.path.join(folder, sensor['model']))
+            sensor['name'] = os.path.splitext(sensor['model'])[0]
+    return config
+
+
+def rotary_lidar_attributes(p):
+    ch = p['channels']
+    n = ch['count']
+    hz = p['scan_rate_hz']
+    firing_hz = int(round(hz * 360.0 / p['horizontal_resolution_deg']))
+    step_ns = int(1e9/firing_hz/n)
+    min_elevation = ch['elevation_min_deg']
+    max_elevation = ch['elevation_max_deg']
+    elevations = [min_elevation + (max_elevation - min_elevation) * i / (n - 1) for i in range(n)]
+    return {
+        CORE + 'scanType': p['scan_type'],
+        CORE + 'rotationDirection': p['rotation_direction'],
+        CORE + 'scanRateBaseHz': hz,
+        CORE + 'patternFiringRateHz': firing_hz,
+        CORE + 'reportRateBaseHz': firing_hz,
+        CORE + 'numberOfEmitters': n,
+        CORE + 'numberOfChannels': n,
+        CORE + 'nearRangeM': p['near_range_m'],
+        CORE + 'rangeOffsetM': p['range_offset_m'],
+        CORE + 'farRangeM': p['far_range_m'],
+        CORE + 'minReflectance': p['min_reflectance'],
+        CORE + 'minReflectionRangeM': p['min_reflectance_range_m'],
+        CORE + 'rangeAccuracyM': p['range_accuracy_m'],
+        CORE + 'rangeResolutionM': p['range_resolution_m'],
+        CORE + 'maxReturns': p['max_returns'],
+        EMITTER + 'azimuthDeg': Vt.FloatArray([0.0] * n),
+        EMITTER + 'elevationDeg': Vt.FloatArray(elevations),
+        EMITTER + 'fireTimeNs': Vt.UIntArray([i * step_ns for i in range(n)]),
+        EMITTER + 'channelId': Vt.UIntArray(list(range(1, n + 1))),
+    }
+
+def create_lidar(stage, path, pose, hz,attributes):
     Lidar.create(path=path, tick_rate=float(hz), schemas=[EMITTER_STATE], accumulate_outputs=True)
     prim = stage.GetPrimAtPath(path)
+
     for name, value in attributes.items():
         attr = prim.GetAttribute(name)
-        if not attr.IsValid() and name == REPORT_RATE:
+        #  isaac sim 6.0+ does not have this attribute
+        if not attr.IsValid() and name == CORE + 'reportRateBaseHz':
             attr = prim.CreateAttribute(name, Sdf.ValueTypeNames.UInt)
         if not attr.IsValid():
             raise RuntimeError(f'{path}: no attribute {name}')
         attr.Set(value)
+
     set_local_pose(stage, path, pose)
 
+def create_sensors(stage, base_link, urdf, config):
+    for lidar in config.get('lidars', []):
+        p = lidar['params']
+        lidar['prim'] = f"{base_link}/sensor_{lidar['name']}"       
+        pose = frame_pose(urdf, lidar['frame'])
+        create_lidar(stage, lidar['prim'], pose, p['scan_rate_hz'], rotary_lidar_attributes(p))
 
-def create_hesai_xt16(stage, path, pose):
-    n = len(HESAI_ELEVATIONS)
-    # vystrely kanalov rozlozene v ramci jedneho azimutoveho kroku (50 us)
-    firing_hz = int(HESAI_HZ * 360.0 / HESAI_AZIMUTH_RES_DEG)
-    step_ns = int(1e9 / firing_hz / n)
-    create_lidar(stage, path, pose, HESAI_HZ, {
-        CORE + 'scanType': 'ROTARY',
-        CORE + 'rotationDirection': 'CW',
-        CORE + 'scanRateBaseHz': HESAI_HZ,
-        CORE + 'patternFiringRateHz': firing_hz,
-        REPORT_RATE: firing_hz,
-        CORE + 'numberOfEmitters': n,
-        CORE + 'numberOfChannels': n,
-        CORE + 'nearRangeM': 0.05,
-        # lidar je vnutri vlastneho meshu (polomer ~5 cm); luce zacinaju az 10 cm od stredu,
-        # inak by ich puzdro zastavilo (nearRangeM len filtruje body, luce neposuva)
-        CORE + 'rangeOffsetM': 0.1,
-        CORE + 'farRangeM': 120.0,
-        CORE + 'minReflectance': 0.1,
-        CORE + 'minReflectionRangeM': 80.0,
-        CORE + 'rangeAccuracyM': 0.01,
-        CORE + 'rangeResolutionM': 0.004,
-        CORE + 'maxReturns': 1,
-        CORE + 'waveLengthNm': 905.0,
-        EMITTER + 'azimuthDeg': Vt.FloatArray([0.0] * n),
-        EMITTER + 'elevationDeg': Vt.FloatArray(HESAI_ELEVATIONS),
-        EMITTER + 'fireTimeNs': Vt.UIntArray([i * step_ns for i in range(n)]),
-        EMITTER + 'channelId': Vt.UIntArray(list(range(1, n + 1))),
-    })
+    for imu in config.get('imus', []):
+        imu['prim'] = f"{base_link}/sensor_{imu['name']}"
+        IMU.create(imu['prim'])
+        set_local_pose(stage, imu['prim'], frame_pose(urdf, imu['frame']))
 
-
-def create_basler(stage, path, optical_pose):
-    camera = UsdGeom.Camera.Define(stage, path)
-    width, height = CAMERA_SENSOR_PX
-    # pomer apertura / ohniskova vzdialenost urcuje zorne pole, jednotky sa vykratia
-    camera.CreateFocalLengthAttr(CAMERA_FOCAL_MM)
-    camera.CreateHorizontalApertureAttr(width * CAMERA_PIXEL_MM)
-    camera.CreateVerticalApertureAttr(height * CAMERA_PIXEL_MM)
-    camera.CreateClippingRangeAttr(Gf.Vec2f(0.01, 100.0))
-    # USD kamera sa pozera po -Z s +Y hore, opticky frame ROS po +Z s +Y dole
-    flip = Gf.Matrix4d().SetRotate(Gf.Rotation(Gf.Vec3d(1, 0, 0), 180.0))
-    set_local_pose(stage, path, flip * optical_pose)
-
-
-def create_imu_graph(imu_path, frame_id, topic):
+def create_imu_graph(imu_name, imu_path, frame_id, topic, read_gravity):
     keys = og.Controller.Keys
     og.Controller.edit(
-        {'graph_path': '/Graph/ROS_LivoxImu', 'evaluator_name': 'execution'},
+        {'graph_path': f"/Graph/ROS_{imu_name}", 'evaluator_name': 'execution',
+         # OnPhysicsStep tika len v on-demand grafe (IMU s krokom fyziky, 200 Hz)
+         'pipeline_stage': og.GraphPipelineStage.GRAPH_PIPELINE_STAGE_ONDEMAND},
         {
             keys.CREATE_NODES: [
-                ('Tick', 'omni.graph.action.OnPlaybackTick'),
+                ('Tick', 'isaacsim.core.nodes.OnPhysicsStep'),
                 ('Context', 'isaacsim.ros2.bridge.ROS2Context'),
                 ('SimTime', 'isaacsim.core.nodes.IsaacReadSimulationTime'),
                 ('ReadImu', 'isaacsim.sensors.physics.IsaacReadIMU'),
@@ -145,12 +130,12 @@ def create_imu_graph(imu_path, frame_id, topic):
             keys.SET_VALUES: [
                 ('SimTime.inputs:resetOnStop', True),
                 ('ReadImu.inputs:imuPrim', [usdrt.Sdf.Path(imu_path)]),
-                ('ReadImu.inputs:readGravity', True),
+                ('ReadImu.inputs:readGravity', read_gravity),
                 ('PubImu.inputs:frameId', frame_id),
                 ('PubImu.inputs:topicName', topic),
             ],
             keys.CONNECT: [
-                ('Tick.outputs:tick', 'ReadImu.inputs:execIn'),
+                ('Tick.outputs:step', 'ReadImu.inputs:execIn'),
                 ('ReadImu.outputs:execOut', 'PubImu.inputs:execIn'),
                 ('ReadImu.outputs:angVel', 'PubImu.inputs:angularVelocity'),
                 ('ReadImu.outputs:linAcc', 'PubImu.inputs:linearAcceleration'),
@@ -161,30 +146,14 @@ def create_imu_graph(imu_path, frame_id, topic):
         },
     )
 
+def create_sensor_graphs(config):
+    for lidar in config.get('lidars', []):
+        create_ros2_rtx_lidar_graph(Ros2RtxLidarGraphConfig(
+            graph_path=f"/Graph/ROS_{lidar['name']}", lidar_prim=lidar['prim'], 
+            frame_id=lidar['frame'], publish_laser_scan=False, publish_point_cloud=True, 
+            point_cloud_topic=lidar['params']['topic']
+        ))
 
-def create_sensors(stage, base_link, urdf):
-    """Create the v2 sensors under base_link. Call before setup_simulation."""
-    hesai = base_link + '/rtx_hesai'
-    camera = base_link + '/sensor_camera'
-    imu = base_link + '/sensor_livox_imu'
-    create_hesai_xt16(stage, hesai, frame_pose(urdf, 'hesai_frame'))
-    create_basler(stage, camera, frame_pose(urdf, 'camera_optical_frame'))
-    IMU.create(imu)
-    set_local_pose(stage, imu, frame_pose(urdf, 'livox_frame'))
-    return {'hesai': hesai, 'camera': camera, 'imu': imu}
-
-
-def create_sensor_graphs(sensors, camera_resolution=CAMERA_RESOLUTION):
-    """ROS 2 publishers for the sensors from create_sensors. Call after setup_simulation."""
-    create_ros2_rtx_lidar_graph(Ros2RtxLidarGraphConfig(
-        graph_path='/Graph/ROS_Hesai', lidar_prim=sensors['hesai'],
-        frame_id='hesai_frame', publish_laser_scan=False,
-        publish_point_cloud=True, point_cloud_topic='/hesai/points'))
-    graph = create_ros2_camera_graph(Ros2CameraGraphConfig(
-        graph_path='/Graph/ROS_Camera', camera_prim=sensors['camera'],
-        frame_id='camera_optical_frame', camera_info_topic='/camera/camera_info',
-        rgb_topic='/camera/image_raw', publish_depth=False))
-    width, height = camera_resolution
-    og.Controller.attribute(graph + '/RenderProduct.inputs:width').set(width)
-    og.Controller.attribute(graph + '/RenderProduct.inputs:height').set(height)
-    create_imu_graph(sensors['imu'], 'livox_frame', '/livox/imu')
+    for imu in config.get('imus', []):
+        create_imu_graph(imu_name=imu['name'], imu_path=imu['prim'], frame_id=imu['frame'],
+                         topic=imu['params']['topic'], read_gravity=imu['params']['read_gravity'])

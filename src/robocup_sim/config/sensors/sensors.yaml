@@ -1,0 +1,7 @@
+lidars:
+  - model: 'robosense_fairy.yaml'
+    frame: 'fairy_optical_frame'
+
+imus:
+  - model: 'robosense_fairy_imu.yaml'
+    frame: 'fairy_frame'  

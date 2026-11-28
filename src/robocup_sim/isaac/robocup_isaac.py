@@ -1,10 +1,7 @@
 # Isaac Sim strana simulacie: nacita arenu z USD, importuje robota shoddy
 # z xacro v robocup_description a napoji ho na ROS 2:
-#   von: /clock, /odom + TF odom->base_link a senzory podla modelu:
-#        v1 (robot.urdf.xacro): 2D lidar Hokuyo -> /scan_raw (frame lidar_frame,
-#           robocup.launch.py ho preposiela na /scan)
-#        v2 (robot_v2.urdf.xacro): Hesai XT16, Livox Horizon s IMU a kamera
-#           Basler, vid robocup_sensors.py
+#   von: /clock, /odom + TF odom->base_link a senzory robota (robot_v2.urdf.xacro)
+#        podla config/slam/sensors/sensors.yaml, vid robocup_sensors.py
 #   dnu: /cmd_vel
 #
 # Podvozok je kinematicky: cmd_vel sa nastavi priamo ako rychlost tela a kolesa
@@ -36,7 +33,6 @@ parser.add_argument('--headless', action='store_true')
 parser.add_argument('--x', type=float, default=0.0)
 parser.add_argument('--y', type=float, default=0.0)
 parser.add_argument('--yaw', type=float, default=0.0)
-parser.add_argument('--model', choices=['v1', 'v2'], default='v2', help='Model robota')
 parser.add_argument('--frames', type=int, default=0,
                     help='Skonci po tolkych snimkach (0 = bez konca)')
 args, _ = parser.parse_known_args()
@@ -56,22 +52,20 @@ from isaacsim.asset.importer.urdf.impl import URDFImporter, URDFImporterConfig
 from isaacsim.core.experimental.prims import Articulation
 from isaacsim.core.rendering_manager import RenderingManager, ViewportManager
 from isaacsim.core.simulation_manager import SimulationEvent, SimulationManager
-from isaacsim.ros2.nodes import (Ros2ClockGraphConfig, Ros2RtxLidarGraphConfig,
-                                 create_ros2_clock_graph, create_ros2_rtx_lidar_graph)
-from isaacsim.sensors.experimental.rtx import Lidar
+from isaacsim.ros2.nodes import Ros2ClockGraphConfig, create_ros2_clock_graph
 from pxr import Gf, PhysxSchema, Usd, UsdGeom, UsdLux, UsdPhysics, UsdShade
+
+# importuje omni/isaacsim moduly, preto az po starte SimulationApp
+import robocup_sensors
 
 # ROS_DISTRO sa Isaacu nedava, bridge by potom hladal systemove ROS kniznice
 ROS_DISTRO = os.environ.get('ROBOCUP_ROS_DISTRO', 'jazzy')
-# model -> xacro v robocup_description/urdf
-MODELS = {'v1': 'robot.urdf.xacro', 'v2': 'robot_v2.urdf.xacro'}
-XACRO = MODELS[args.model]
-SCAN_FRAME = 'lidar_frame'  # 2D lidar modelu v1
-# v2: fyzika 200 Hz, IMU Livoxu publikuje pri kazdom kroku (BMI088 ma 200 Hz; 5 ms deli aj
-# 100 ms snimok lidaru), render 50 Hz (4 kroky fyziky na snimok), aby sa kamera a lidary
-# nekreslili 200x za sekundu
-PHYSICS_DT = 1.0 / 200.0 if args.model == 'v2' else 1.0 / 60.0
-RENDERING_DT = 1.0 / 50.0 if args.model == 'v2' else 1.0 / 60.0
+# xacro v robocup_description/urdf
+XACRO = 'robot_v2.urdf.xacro'
+# fyzika 200 Hz, IMU publikuje pri kazdom kroku (200 Hz; 5 ms deli aj 100 ms snimok
+# lidaru), render 50 Hz (4 kroky fyziky na snimok), aby sa lidary nekreslili 200x za sekundu
+PHYSICS_DT = 1.0 / 200.0
+RENDERING_DT = 1.0 / 50.0
 MAX_ACCELERATION = 2.0
 MAX_ANGULAR_ACCELERATION = 2 * MAX_ACCELERATION / 0.48
 CMD_VEL_NODE = '/Graph/ROS_Base/CmdVel'
@@ -165,19 +159,11 @@ def import_robot():
     return usd_file, urdf
 
 
-def lidar_offset(urdf):
-    for joint in ET.parse(urdf).getroot().iter('joint'):
-        if joint.find('child').get('link') == SCAN_FRAME:
-            assert joint.find('parent').get('link') == 'base_link'
-            return [float(v) for v in joint.find('origin').get('xyz').split()]
-    raise RuntimeError(f'no joint to {SCAN_FRAME} in {urdf}')
-
-
 def base_height(urdf):
     """Height of base_link above the floor: lowest wheel point plus WHEEL_CLEARANCE.
 
     Wheels are the children of continuous joints with a cylinder collision; their
-    joint chains to base_link must be pure translations (true for v1 and v2).
+    joint chains to base_link must be pure translations.
     """
     root = ET.parse(urdf).getroot()
     joints = {j.find('child').get('link'): j for j in root.iter('joint')}
@@ -322,18 +308,12 @@ def main():
     make_frictionless(stage, robot)
     simulation_app.update()
     articulation, base_link = find_prims(robot)
-    print(f'[robocup_isaac] model={args.model} articulation={articulation} base_link={base_link} '
+    print(f'[robocup_isaac] articulation={articulation} base_link={base_link} '
           f'base height {height:.4f} m')
 
-    if args.model == 'v1':
-        lidar_path = base_link + '/rtx_lidar'
-        Lidar.create(path=lidar_path, config='Example_Rotary_2D', tick_rate=10.0,
-                     translations=[lidar_offset(urdf)],
-                     attributes={'omni:sensor:Core:nearRangeM': 0.15,
-                                 'omni:sensor:Core:farRangeM': 4.0})
-    else:
-        import robocup_sensors
-        sensors = robocup_sensors.create_sensors(stage, base_link, urdf)
+    # senzory pred setup_simulation, ROS grafy az po nom
+    sensors = robocup_sensors.load_sensor_configs(robocup_sensors.SENSORS_YAML)
+    robocup_sensors.create_sensors(stage, base_link, urdf, sensors)
 
     SimulationManager.setup_simulation(dt=PHYSICS_DT, device='cpu')
     RenderingManager.set_dt(RENDERING_DT)
@@ -341,12 +321,7 @@ def main():
 
     create_ros2_clock_graph(Ros2ClockGraphConfig(graph_path='/Graph/ROS_Clock'))
     create_base_graph(articulation)
-    if args.model == 'v1':
-        create_ros2_rtx_lidar_graph(Ros2RtxLidarGraphConfig(
-            graph_path='/Graph/ROS_Lidar', lidar_prim=lidar_path,
-            frame_id=SCAN_FRAME, laser_scan_topic='/scan_raw'))
-    else:
-        robocup_sensors.create_sensor_graphs(sensors)
+    robocup_sensors.create_sensor_graphs(sensors)
     simulation_app.update()
 
     app_utils.play()
